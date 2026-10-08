@@ -1,0 +1,15 @@
+# 脚本运行/测试时产生的备份与临时文件
+*.bak.setupdev
+*.bak.setupdev.*
+*.bak.[0-9]*
+
+# 编辑器 / 系统
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+.DS_Store
+
+# 日志
+*.log
