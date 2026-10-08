@@ -1,12 +1,12 @@
-# setup-dev.sh
+# envstrap
 
-交互式 Linux 开发环境安装脚本，面向 **Web 全栈 / ROS 2 / Rust / STM32 嵌入式** 的开发者。
-
-一台新装的 Ubuntu/Debian 或 Fedora/RHEL 上跑一次，把常用工具链、镜像源、shell 环境配好。
+一句话把新机器拉起来：**envstrap** = environment + bootstrap。
+面向 **Web 全栈 / ROS 2 / Rust / STM32 嵌入式** 的开发者，
+在一台新装的 Ubuntu/Debian 或 Fedora/RHEL 上跑一次，把常用工具链、镜像源、shell 环境配好。
 
 ```bash
-./setup-dev.sh                     # 交互式 TUI（推荐）
-./setup-dev.sh --dry-run --all     # 预演，不改任何东西
+./envstrap.sh                     # 交互式 TUI（推荐）
+./envstrap.sh --dry-run --all     # 预演，不改任何东西
 ```
 
 ## 特性
@@ -52,25 +52,25 @@
 ## 用法
 
 ```bash
-./setup-dev.sh                              # 交互式
-./setup-dev.sh --all --mirror auto          # 全量 + 自动换源
-./setup-dev.sh --only mirror                # 只测速换源
-./setup-dev.sh --only node,python,rust      # 只装部分工具链
-./setup-dev.sh --only zsh --zsh-theme powerlevel10k
-./setup-dev.sh --apt-mirror                 # 附加：把 apt 主源切到最快国内镜像
-./setup-dev.sh --dry-run --all              # 预演
-./setup-dev.sh --list                       # 列出模块
+./envstrap.sh                              # 交互式
+./envstrap.sh --all --mirror auto          # 全量 + 自动换源
+./envstrap.sh --only mirror                # 只测速换源
+./envstrap.sh --only node,python,rust      # 只装部分工具链
+./envstrap.sh --only zsh --zsh-theme powerlevel10k
+./envstrap.sh --apt-mirror                 # 附加：把 apt 主源切到最快国内镜像
+./envstrap.sh --dry-run --all              # 预演
+./envstrap.sh --list                       # 列出模块
 ```
 
 主要选项：`--all` `--only LIST` `--ros DISTRO` `--mirror MODE` `--apt-mirror URL`
 `--zsh-theme NAME` `--zsh-overwrite-rc` `--no-chsh` `--no-docker-group` `--dry-run` `--no-tui` `-y` `-l` `-h`
 
-环境变量：`SETUP_DEV_NO_PROFILE=1` 时**绝不修改** `~/.bashrc`、`~/.zshrc`、`uv.toml`、`pip.conf`、cargo 配置，只打印需要手动添加的行（适合用 chezmoi/stow 等 dotfiles 工具管理配置的人）。
+环境变量：`ENVSTRAP_NO_PROFILE=1` 时**绝不修改** `~/.bashrc`、`~/.zshrc`、`uv.toml`、`pip.conf`、cargo 配置，只打印需要手动添加的行（适合用 chezmoi/stow 等 dotfiles 工具管理配置的人）。
 
 ## 安全设计
 
-- shell 集成只维护**一个带标记的块**，内容由状态文件 `~/.config/setup-dev-shell/profile-lines` 生成，因此换源改值会**原地更新**而不是不断追加；块外你自己的配置不会被覆盖（同名环境变量在块外已手动设置时会跳过并提示，`PATH` 类追加语义变量例外）。
-- 改动前留存 `.bak.setupdev` 备份；`--dry-run` 与 `SETUP_DEV_NO_PROFILE=1` 都不会写入。
+- shell 集成只维护**一个带标记的块**，内容由状态文件 `~/.config/envstrap/profile-lines` 生成，因此换源改值会**原地更新**而不是不断追加；块外你自己的配置不会被覆盖（同名环境变量在块外已手动设置时会跳过并提示，`PATH` 类追加语义变量例外）。
+- 改动前留存 `.bak.envstrap` 备份；`--dry-run` 与 `ENVSTRAP_NO_PROFILE=1` 都不会写入。
 - Docker `registry-mirrors` 属于第三方通道，存在投毒风险，仅建议开发机使用（脚本会告警）。
 
 ## 平台支持与已知限制
@@ -78,7 +78,7 @@
 - 已验证环境：Ubuntu 24.04（apt 路径）。
 - **Fedora/RHEL 的 dnf 路径按官方文档编写，尚未在 Fedora 机器上实测**，首次使用请留意包名差异（如 `arm-none-eabi-gcc-cs`、EPEL/CRB 细节）。
 - ROS 2 的 rpm 仓库没有公共镜像，故 **rpm 侧不支持换源**，只有 apt 侧可以。
-- Docker 镜像按**延迟**排序而非实测拉取吞吐；公共镜像列表会变动，失效项会被自动排除。想重新挑一次：`./setup-dev.sh --only mirror`。
+- Docker 镜像按**延迟**排序而非实测拉取吞吐；公共镜像列表会变动，失效项会被自动排除。想重新挑一次：`./envstrap.sh --only mirror`。
 - apt 主源切换只支持 Ubuntu（Debian 的 security 仓库路径不同，刻意跳过）。
 - 需要 bash 4.4+（Ubuntu 20.04+/Debian 10+/Fedora 均满足）。
 

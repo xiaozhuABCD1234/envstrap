@@ -1,6 +1,6 @@
 # 脚本运行/测试时产生的备份与临时文件
-*.bak.setupdev
-*.bak.setupdev.*
+*.bak.envstrap
+*.bak.envstrap.*
 *.bak.[0-9]*
 
 # 编辑器 / 系统

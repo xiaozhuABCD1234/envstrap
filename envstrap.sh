@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# setup-dev.sh — 交互式 Linux 开发环境安装脚本
+# envstrap.sh — 交互式 Linux 开发环境安装脚本
 #
 # 覆盖技术栈:
 #   - Web 全栈: node (fnm/nvm), pnpm, git, docker, uv (python)
@@ -14,11 +14,11 @@
 # 特性: 幂等(已装则跳过), 失败不中断(最后汇总), 幂等可重复执行
 #
 # 用法:
-#   ./setup-dev.sh              # 交互式选择模块
-#   ./setup-dev.sh --all        # 安装全部模块(非交互)
-#   ./setup-dev.sh --dry-run    # 只打印将要执行的命令
-#   ./setup-dev.sh --list       # 列出模块
-#   ./setup-dev.sh -h           # 帮助
+#   ./envstrap.sh              # 交互式选择模块
+#   ./envstrap.sh --all        # 安装全部模块(非交互)
+#   ./envstrap.sh --dry-run    # 只打印将要执行的命令
+#   ./envstrap.sh --list       # 列出模块
+#   ./envstrap.sh -h           # 帮助
 #
 set -uo pipefail
 
@@ -190,19 +190,19 @@ pkg_installed() { # pkg_installed <pkg> → 0 表示已安装
 # ---------------------------------------------------------------------------
 # shell 集成管理
 #   所有写入 ~/.bashrc / ~/.zshrc 的行由状态文件统一生成:
-#     状态文件: ~/.config/setup-dev-shell/profile-lines  (格式: <key>TAB<line>)
+#     状态文件: ~/.config/envstrap/profile-lines  (格式: <key>TAB<line>)
 #   rc 文件中只维护一个标记块, 因此:
 #     - 重复执行不会产生重复行
 #     - 同一 key(如 UV_DEFAULT_INDEX) 换源时会原地更新而不是叠加
 #     - 用户在块外手动设置的同名变量不会被覆盖
 # ---------------------------------------------------------------------------
-PROFILE_MARKER="# >>> setup-dev.sh managed block >>>"
-PROFILE_END="# <<< setup-dev.sh managed block <<<"
+PROFILE_MARKER="# >>> envstrap managed block >>>"
+PROFILE_END="# <<< envstrap managed block <<<"
 
-profile_state_file() { printf '%s' "$HOME/.config/setup-dev-shell/profile-lines"; }
+profile_state_file() { printf '%s' "$HOME/.config/envstrap/profile-lines"; }
 
-# SETUP_DEV_NO_PROFILE=1 → 完全不碰 ~/.bashrc / ~/.zshrc / 其他配置(只打印要手动添加的内容)
-profile_writes_disabled() { (( ${SETUP_DEV_NO_PROFILE:-0} )); }
+# ENVSTRAP_NO_PROFILE=1 → 完全不碰 ~/.bashrc / ~/.zshrc / 其他配置(只打印要手动添加的内容)
+profile_writes_disabled() { (( ${ENVSTRAP_NO_PROFILE:-0} )); }
 
 profile_rc_files() {
   local -a rcs=()
@@ -240,9 +240,9 @@ _profile_regenerate() {
       rm -f "$tmp"; warn "重写 $(basename "$rc") 失败"; continue
     fi
     if cmp -s "$tmp" "$rc"; then rm -f "$tmp"; continue; fi
-    cp -n "$rc" "$rc.bak.setupdev" 2>/dev/null || true
+    cp -n "$rc" "$rc.bak.envstrap" 2>/dev/null || true
     cat "$tmp" > "$rc" && rm -f "$tmp"
-    ok "已更新 $(basename "$rc") 的 setup-dev 配置块"
+    ok "已更新 $(basename "$rc") 的 envstrap 配置块"
   done
 }
 
@@ -250,7 +250,7 @@ _profile_regenerate() {
 managed_profile_add() {
   local key="$1" line="$2"
   if profile_writes_disabled; then
-    info "[SETUP_DEV_NO_PROFILE=1] 未写入 shell 配置, 请手动添加: $line"
+    info "[ENVSTRAP_NO_PROFILE=1] 未写入 shell 配置, 请手动添加: $line"
     return 0
   fi
   local state; state="$(profile_state_file)"
@@ -316,7 +316,7 @@ ensure_profile_line() { # 静态行: 以行内容作为去重 key
 file_block_upsert() { # <file> ; 内容从 stdin 读取
   local f="$1" content; content="$(cat)"
   if profile_writes_disabled; then
-    info "[SETUP_DEV_NO_PROFILE=1] 未写入 $f"
+    info "[ENVSTRAP_NO_PROFILE=1] 未写入 $f"
     return 0
   fi
   if (( DRY_RUN )); then
@@ -324,7 +324,7 @@ file_block_upsert() { # <file> ; 内容从 stdin 读取
   fi
   mkdir -p "$(dirname "$f")"
   [[ -f "$f" ]] || : > "$f"
-  cp -n "$f" "$f.bak.setupdev" 2>/dev/null || true
+  cp -n "$f" "$f.bak.envstrap" 2>/dev/null || true
   local tmp; tmp="$(mktemp)"
   awk -v b="$PROFILE_MARKER" -v e="$PROFILE_END" -v body="$content" '
     BEGIN { inb=0; done=0 }
@@ -639,7 +639,7 @@ apply_ros_apt_mirror() { # <base url>
   for f in "${files[@]}"; do
     [[ -f "$f" ]] || continue
     sudo grep -q 'packages\.ros\.org' "$f" 2>/dev/null || continue
-    sudo cp "$f" "$f.bak.setupdev" 2>/dev/null || true
+    sudo cp "$f" "$f.bak.envstrap" 2>/dev/null || true
     sudo sed -i "s#https\?://packages\.ros\.org/ros2/ubuntu#${url}#g" "$f"
     changed=1
   done
@@ -648,7 +648,7 @@ apply_ros_apt_mirror() { # <base url>
     ok "ROS 2 apt 源 → $url"
   else
     warn "换源后 apt update 失败, 回滚 ROS 源"
-    for f in "${files[@]}"; do [[ -f "$f.bak.setupdev" ]] && sudo cp "$f.bak.setupdev" "$f"; done
+    for f in "${files[@]}"; do [[ -f "$f.bak.envstrap" ]] && sudo cp "$f.bak.envstrap" "$f"; done
     pkg_update >/dev/null 2>&1 || true
     return 1
   fi
@@ -665,14 +665,14 @@ apply_apt_main_mirror() { # <base url>  仅 ubuntu
   fi
   sudo_ok || { warn "当前会话无法使用 sudo, 跳过 apt 主源切换"; return 1; }
   for f in "${files[@]}"; do
-    sudo cp "$f" "$f.bak.setupdev" 2>/dev/null || true
+    sudo cp "$f" "$f.bak.envstrap" 2>/dev/null || true
     sudo sed -i -E "s#https?://[a-z0-9.-]*\.?ubuntu\.com/ubuntu#${url}#g" "$f"
   done
   if pkg_update; then
     ok "apt 主源 → $url"
   else
     warn "换源后 apt update 失败, 自动回滚 apt 主源"
-    for f in "${files[@]}"; do [[ -f "$f.bak.setupdev" ]] && sudo cp "$f.bak.setupdev" "$f"; done
+    for f in "${files[@]}"; do [[ -f "$f.bak.envstrap" ]] && sudo cp "$f.bak.envstrap" "$f"; done
     pkg_update >/dev/null 2>&1 || true
     return 1
   fi
@@ -1532,10 +1532,10 @@ write_zshrc() {
     return 0
   fi
 
-  [[ -f "$rc" ]] && cp "$rc" "$rc.bak.setupdev.$(date +%Y%m%d%H%M%S)"
+  [[ -f "$rc" ]] && cp "$rc" "$rc.bak.envstrap.$(date +%Y%m%d%H%M%S)"
   cat > "$rc" <<ZSHRC
-# ~/.zshrc — 由 setup-dev.sh 生成, 可自由修改
-# 注意: 文件末尾的 setup-dev 管理块由脚本维护, 个人配置建议写到 ~/.zshrc.local
+# ~/.zshrc — 由 envstrap.sh 生成, 可自由修改
+# 注意: 文件末尾的 envstrap 管理块由脚本维护, 个人配置建议写到 ~/.zshrc.local
 
 export ZSH="\$HOME/.oh-my-zsh"
 ZSH_THEME="$theme"
@@ -2107,10 +2107,10 @@ print_summary() {
 # ---------------------------------------------------------------------------
 usage() {
   cat <<'EOF'
-setup-dev.sh — 交互式 Linux 开发环境安装脚本
+envstrap.sh — 交互式 Linux 开发环境安装脚本
 
 用法:
-  ./setup-dev.sh [选项]
+  ./envstrap.sh [选项]
 
 选项:
   -a, --all          安装全部模块(非交互; ROS 2 用系统推荐发行版)
@@ -2132,17 +2132,17 @@ setup-dev.sh — 交互式 Linux 开发环境安装脚本
   -h, --help         显示帮助
 
 环境变量:
-  SETUP_DEV_NO_PROFILE=1  绝不修改 ~/.bashrc / ~/.zshrc / uv.toml / pip.conf /
+  ENVSTRAP_NO_PROFILE=1  绝不修改 ~/.bashrc / ~/.zshrc / uv.toml / pip.conf /
                           cargo config (用 dotfiles 工具管理的用户推荐); 需要添加的
                           行会打印出来由你自行放入配置
 
 示例:
-  ./setup-dev.sh                            # 交互式(推荐)
-  ./setup-dev.sh --all --mirror auto        # 全量 + 自动测速换源
-  ./setup-dev.sh --only mirror              # 只测速换源
-  ./setup-dev.sh --only node,python,rust    # 只装 web / rust 工具链
-  ./setup-dev.sh --only zsh --zsh-theme powerlevel10k
-  ./setup-dev.sh --dry-run --all            # 预演
+  ./envstrap.sh                            # 交互式(推荐)
+  ./envstrap.sh --all --mirror auto        # 全量 + 自动测速换源
+  ./envstrap.sh --only mirror              # 只测速换源
+  ./envstrap.sh --only node,python,rust    # 只装 web / rust 工具链
+  ./envstrap.sh --only zsh --zsh-theme powerlevel10k
+  ./envstrap.sh --dry-run --all            # 预演
 
 支持系统: Ubuntu/Debian (apt), Fedora/RHEL (dnf)
 EOF
