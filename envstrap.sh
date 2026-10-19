@@ -740,9 +740,9 @@ mod_mirrors() {
   # --- crates.io (cargo) ---
   if select_source "crates.io" speed '200|206' 1048575 6 "official" \
       "官方 crates.io|https://index.crates.io|https://index.crates.io/se/rd/serde|official" \
-      "RsProxy(字节)|sparse+https://rsproxy.cn/index|https://rsproxy.cn/index/se/rd/serde|cn" \
-      "清华 TUNA|sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index|https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/se/rd/serde|cn" \
-      "中科大 USTC|sparse+https://mirrors.ustc.edu.cn/crates.io-index|https://mirrors.ustc.edu.cn/crates.io-index/se/rd/serde|cn" ; then
+      "RsProxy(字节)|sparse+https://rsproxy.cn/index/|https://rsproxy.cn/index/se/rd/serde|cn" \
+      "清华 TUNA|sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/|https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/se/rd/serde|cn" \
+      "中科大 USTC|sparse+https://mirrors.ustc.edu.cn/crates.io-index/|https://mirrors.ustc.edu.cn/crates.io-index/se/rd/serde|cn" ; then
     apply_cargo_source "$MIRROR_PICK_CFG" && { okc=$((okc+1)); MIRROR_SUMMARY+=("cargo → $MIRROR_PICK_NAME"); }
   fi
 
