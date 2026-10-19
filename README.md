@@ -33,6 +33,14 @@
 | `zsh` | zsh + oh-my-zsh + autosuggestions/syntax-highlighting/completions，可设为默认 shell |
 | `gitconfig` | git 全局 `user.name`/`user.email` 与常用选项 |
 | `extra` | jq/rg/fd/tmux/htop/clangd/valgrind/minicom/can-utils 等 |
+| `ime` | IBus + 智能拼音(libpinyin)：模糊音、每页候选数、翻页键、自动造词，含中文字体 |
+
+`ime` 模块把偏好写进 dconf（schema `com.github.libpinyin.ibus-libpinyin.libpinyin`），并把
+`('ibus', 'libpinyin')` **追加**到 GNOME 输入源列表（保留你已有的条目）。dconf 属于桌面用户级
+配置，所以**以 root 运行只装包、跳过偏好**。默认口径：模糊音「标准」（平翘舌 + 前后鼻音，方言向
+的 l/n、f/h、g/k、l/r 显式关闭）、每页 7 个候选、`,` `.` 与 `-` `=` 翻页、开启自动造词。
+**云输入默认关闭**：实测百度接口已失效，可用的 Google 接口会在停手约 0.6s 时把待选拼音串发往
+第三方服务器，介意隐私就别开 `--im-cloud`。
 
 ## 换源策略
 
@@ -57,15 +65,19 @@
 ./envstrap.sh --only mirror                # 只测速换源
 ./envstrap.sh --only node,python,rust      # 只装部分工具链
 ./envstrap.sh --only zsh --zsh-theme powerlevel10k
+./envstrap.sh --only ime --im-fuzzy all    # 只配中文输入法, 模糊音全开
 ./envstrap.sh --apt-mirror                 # 附加：把 apt 主源切到最快国内镜像
 ./envstrap.sh --dry-run --all              # 预演
 ./envstrap.sh --list                       # 列出模块
 ```
 
 主要选项：`--all` `--only LIST` `--ros DISTRO` `--mirror MODE` `--apt-mirror URL`
-`--zsh-theme NAME` `--zsh-overwrite-rc` `--no-chsh` `--no-docker-group` `--dry-run` `--no-tui` `-y` `-l` `-h`
+`--zsh-theme NAME` `--zsh-overwrite-rc` `--no-chsh` `--no-docker-group`
+`--im-page-size N` `--im-fuzzy std|all|off` `--im-cloud off|baidu|google|google-cn` `--no-im-sources`
+`--dry-run` `--no-tui` `-y` `-l` `-h`
 
-环境变量：`ENVSTRAP_NO_PROFILE=1` 时**绝不修改** `~/.bashrc`、`~/.zshrc`、`uv.toml`、`pip.conf`、cargo 配置，只打印需要手动添加的行（适合用 chezmoi/stow 等 dotfiles 工具管理配置的人）。
+环境变量：`ENVSTRAP_NO_PROFILE=1` 时**绝不修改** `~/.bashrc`、`~/.zshrc`、`uv.toml`、`pip.conf`、cargo 配置与
+输入法 dconf 偏好，只打印需要手动添加的行 / `gsettings` 命令（适合用 chezmoi/stow 等 dotfiles 工具管理配置的人）。
 
 ## 安全设计
 
@@ -76,7 +88,9 @@
 ## 平台支持与已知限制
 
 - 已验证环境：Ubuntu 24.04（apt 路径）。
-- **Fedora/RHEL 的 dnf 路径按官方文档编写，尚未在 Fedora 机器上实测**，首次使用请留意包名差异（如 `arm-none-eabi-gcc-cs`、EPEL/CRB 细节）。
+- **Fedora/RHEL 的 dnf 路径按官方文档编写，尚未在 Fedora 机器上实测**，首次使用请留意包名差异（如 `arm-none-eabi-gcc-cs`、EPEL/CRB 细节，`ime` 模块则为 `ibus-libpinyin`、`google-noto-sans-cjk-fonts`）。
+- `ime` 模块只在 GNOME/Unity 桌面上改动输入源列表；KDE/XFCE 等桌面只装引擎与偏好，输入法入口需在各自设置里添加。
+- 若中文输入法在装完后没出现，先 `ibus restart`；仍不行就注销重登（新装的引擎组件需要 ibus-daemon 重新加载）。
 - ROS 2 的 rpm 仓库没有公共镜像，故 **rpm 侧不支持换源**，只有 apt 侧可以。
 - Docker 镜像按**延迟**排序而非实测拉取吞吐；公共镜像列表会变动，失效项会被自动排除。想重新挑一次：`./envstrap.sh --only mirror`。
 - apt 主源切换只支持 Ubuntu（Debian 的 security 仓库路径不同，刻意跳过）。

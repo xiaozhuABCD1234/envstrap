@@ -7,6 +7,7 @@
 #   - ROS 2:    ros-<distro>-desktop, colcon, rosdep, vcs
 #   - Rust:     rustup (用户级, 不碰系统 rust)
 #   - STM32:    arm-none-eabi-gcc, cmake, ninja, openocd, udev 规则
+#   - 输入法:   IBus + 智能拼音(libpinyin), 模糊音/候选词/翻页偏好
 #   - 镜像源:   npm/pnpm, PyPI(uv/pip), crates.io(cargo/rustup), Docker registry, ROS, apt
 #
 # 支持: Ubuntu / Debian (apt) 与 Fedora / RHEL (dnf)
@@ -1463,6 +1464,181 @@ mod_extra() {
 }
 
 # ---------------------------------------------------------------------------
+# 模块: 中文输入法 (IBus + 智能拼音 libpinyin)
+#   装引擎包, 并把模糊音/候选词/翻页等偏好写进 dconf(GSettings)。
+#   注意: dconf 属于"桌面用户"级配置, 因此以 root 运行时会跳过偏好只装包。
+# ---------------------------------------------------------------------------
+IM_SCHEMA="com.github.libpinyin.ibus-libpinyin.libpinyin"
+IM_PAGE_SIZE=7        # 每页候选词数 (1..11)
+IM_FUZZY_SET="std"    # std(平翘舌+前后鼻音) | all(含方言向) | off
+IM_CLOUD="off"        # off | baidu | google | google-cn
+IM_SET_SOURCES=1      # 是否把 ibus:libpinyin 追加进 GNOME 输入源列表
+IM_DCONF_FAILED=0
+# 模糊音子项: 标准档 = 平翘舌 + 前后鼻音; 方言档 = l/n, f/h, g/k, l/r
+# 注意: 方言档这几项在 schema 里默认就是 true, 所以标准档必须显式关掉, 否则等于全开
+IM_FUZZY_STD=(z-zh c-ch s-sh an-ang en-eng in-ing)
+IM_FUZZY_DIALECT=(l-n f-h g-k l-r)
+
+# 是否 GNOME 系的桌面(无法判断, 如 SSH 进来时 XDG_CURRENT_DESKTOP 为空, 视为可用)
+_ime_gnome_like() {
+  case "${XDG_CURRENT_DESKTOP:-}" in
+    ""|*GNOME*|*gnome*|*Unity*|*unity*) return 0 ;;
+  esac
+  return 1
+}
+
+_ime_schema_ok() { # <schema>
+  have gsettings || return 1
+  gsettings list-schemas 2>/dev/null | grep -qx "$1"
+}
+
+_ime_set() { # <key> <value> — 写 dconf; dry-run 只打印, 真实写入后回读校验
+  local k="$1" v="$2"
+  run gsettings set "$IM_SCHEMA" "$k" "$v" 2>/dev/null || IM_DCONF_FAILED=1
+  (( DRY_RUN )) && return 0
+  # 没有会话总线/dconf 不可用时 gsettings 会静默失败, 故回读确认
+  [[ "$(gsettings get "$IM_SCHEMA" "$k" 2>/dev/null)" == "$v" ]] || IM_DCONF_FAILED=1
+  return 0
+}
+
+_ime_apply_prefs() {
+  local k
+  _ime_set lookup-table-page-size "$IM_PAGE_SIZE"
+  _ime_set lookup-table-orientation 0     # 0=横排, 1=竖排
+  _ime_set comma-period-page true         # , .  翻页
+  _ime_set minus-equal-page true          # - =  翻页
+  _ime_set remember-every-input true      # 自动造词(输入即记忆)
+
+  if [[ "$IM_FUZZY_SET" == "off" ]]; then
+    _ime_set fuzzy-pinyin false
+    for k in "${IM_FUZZY_STD[@]}" "${IM_FUZZY_DIALECT[@]}"; do _ime_set "fuzzy-pinyin-$k" false; done
+  else
+    _ime_set fuzzy-pinyin true
+    for k in "${IM_FUZZY_STD[@]}"; do _ime_set "fuzzy-pinyin-$k" true; done
+    if [[ "$IM_FUZZY_SET" == "all" ]]; then
+      for k in "${IM_FUZZY_DIALECT[@]}"; do _ime_set "fuzzy-pinyin-$k" true; done
+    else
+      for k in "${IM_FUZZY_DIALECT[@]}"; do _ime_set "fuzzy-pinyin-$k" false; done
+    fi
+  fi
+
+  case "$IM_CLOUD" in
+    baidu)     _ime_set cloud-input-source 0 ;;   # 实测该接口已失效, 仅作兼容
+    google)    _ime_set cloud-input-source 1 ;;
+    google-cn) _ime_set cloud-input-source 2 ;;
+  esac
+  if [[ "$IM_CLOUD" == "off" ]]; then
+    _ime_set enable-cloud-input false
+  else
+    _ime_set enable-cloud-input true
+  fi
+}
+
+# 把 ('ibus','libpinyin') 追加进 GNOME 输入源, 保留用户已有条目
+_ime_add_gnome_source() {
+  local cur new
+  cur="$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || true)"
+  if [[ "$cur" == *"'libpinyin'"* ]]; then
+    info "GNOME 输入源已包含「智能拼音」, 跳过"
+    return 0
+  fi
+  if [[ -z "$cur" || "$cur" == "@as []" || "$cur" == "[]" ]]; then
+    new="[('xkb', 'us'), ('ibus', 'libpinyin')]"
+  else
+    new="${cur%]}, ('ibus', 'libpinyin')]"
+  fi
+  run gsettings set org.gnome.desktop.input-sources sources "$new" 2>/dev/null
+  (( DRY_RUN )) && return 0
+  if [[ "$(gsettings get org.gnome.desktop.input-sources sources 2>/dev/null || true)" == *"'libpinyin'"* ]]; then
+    ok "已把「智能拼音」加入 GNOME 输入源"
+  else
+    warn "输入源列表写入失败(无桌面会话?); 请在 系统设置 → 键盘 → 输入源 里手动添加"
+  fi
+  return 0
+}
+
+mod_ime() {
+  # 参数合法性(允许 --im-page-size=abc 这类误输入不炸掉整个脚本)
+  if ! [[ "$IM_PAGE_SIZE" =~ ^[0-9]+$ ]] || (( IM_PAGE_SIZE < 1 || IM_PAGE_SIZE > 11 )); then
+    warn "--im-page-size 取值无效: $IM_PAGE_SIZE (应为 1..11), 改用 7"
+    IM_PAGE_SIZE=7
+  fi
+  case "$IM_FUZZY_SET" in
+    std|all|off) ;;
+    *) warn "--im-fuzzy 取值无效: $IM_FUZZY_SET (可为 std|all|off), 改用 std"; IM_FUZZY_SET="std" ;;
+  esac
+  case "$IM_CLOUD" in
+    off|baidu|google|google-cn) ;;
+    *) warn "--im-cloud 取值无效: $IM_CLOUD (可为 off|baidu|google|google-cn), 改用 off"; IM_CLOUD="off" ;;
+  esac
+
+  local -a core opt
+  core=(ibus ibus-libpinyin)
+  if [[ "$PKG_FAMILY" == "deb" ]]; then
+    opt=(ibus-gtk ibus-gtk3 ibus-gtk4 fonts-noto-cjk)
+  else
+    opt=(ibus-gtk3 ibus-gtk4 google-noto-sans-cjk-fonts)
+  fi
+
+  pkg_install "${core[@]}" || { warn "IBus / 智能拼音安装失败"; return 1; }
+  # GTK 输入模块与中文字体: 各发行版包名有差异, 缺项不影响主流程
+  pkg_install_optional "${opt[@]}" || warn "GTK 输入模块 / 中文字体有缺失项(多数场景可忽略)"
+
+  # 引擎是否真的注册成功(无图形会话时 ibus 连不上会话总线, 属正常, 不算失败)
+  if (( ! DRY_RUN )) && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && have ibus; then
+    if ibus list-engine 2>/dev/null | grep -q 'libpinyin'; then
+      ok "IBus 智能拼音引擎已注册"
+    else
+      warn "ibus 暂未列出 libpinyin 引擎, 登录桌面后执行 ibus restart 再看"
+    fi
+  fi
+
+  local fz
+  case "$IM_FUZZY_SET" in
+    off) fz="关" ;;
+    all) fz="全开(含 l/n f/h g/k l/r)" ;;
+    *)   fz="标准(平翘舌 + 前后鼻音)" ;;
+  esac
+
+  # 引擎偏好: dconf 是桌面用户级配置, 用 dotfiles 管理或有洁癖时只打印命令
+  if profile_writes_disabled; then
+    info "[ENVSTRAP_NO_PROFILE=1] 只打印输入法偏好命令, 不写入 dconf:"
+    local _dry_saved=$DRY_RUN; DRY_RUN=1
+    _ime_apply_prefs
+    DRY_RUN=$_dry_saved
+  elif ! _ime_schema_ok "$IM_SCHEMA"; then
+    warn "未找到 gsettings 或 libpinyin schema, 跳过偏好设置"
+    warn "  装好包后在桌面会话里重跑: ./envstrap.sh --only ime"
+  elif [[ "$(id -u 2>/dev/null)" == "0" ]]; then
+    warn "以 root 运行: dconf 偏好属于桌面用户, 已跳过(避免写进 root 的配置)"
+    warn "  请以普通用户身份执行: ./envstrap.sh --only ime"
+  else
+    _ime_apply_prefs
+    if (( IM_DCONF_FAILED )); then
+      warn "部分偏好写入失败(dconf 不可用?), 请在桌面会话里重跑本模块"
+    else
+      ok "输入法偏好已生效: 模糊音=${fz}, 每页候选=${IM_PAGE_SIZE}, ,./-= 翻页, 云输入=${IM_CLOUD}"
+    fi
+  fi
+
+  # GNOME 输入源列表(只动 GNOME 系; KDE/XFCE 有自己的输入法配置)
+  if (( IM_SET_SOURCES )); then
+    if ! _ime_gnome_like; then
+      info "当前桌面为 ${XDG_CURRENT_DESKTOP:-未知}, 未改动输入源列表"
+      info "  请在桌面设置里添加输入法「智能拼音 / Intelligent Pinyin」"
+    elif ! _ime_schema_ok org.gnome.desktop.input-sources; then
+      info "未找到 org.gnome.desktop.input-sources, 跳过输入源列表"
+    elif profile_writes_disabled; then
+      info "[ENVSTRAP_NO_PROFILE=1] 未改动 GNOME 输入源列表"
+    else
+      _ime_add_gnome_source
+    fi
+  fi
+
+  ok "中文输入法完成 (输入源列表未刷新时: ibus restart 或重新登录)"
+}
+
+# ---------------------------------------------------------------------------
 # 模块: zsh + oh-my-zsh (+ 插件/主题, 可选设为默认 shell)
 # ---------------------------------------------------------------------------
 ZSH_THEME_CHOICE="robbyrussell"   # robbyrussell | powerlevel10k | agnoster | ...
@@ -1619,12 +1795,12 @@ set_default_shell() {
 # ---------------------------------------------------------------------------
 # 交互式菜单
 # ---------------------------------------------------------------------------
-MODULE_KEYS=(    base      mirror      docker     node       python     rust       embedded     ros2       zsh        gitconfig extra )
-MODULE_NAMES=(   "基础工具" "镜像源测速" "Docker"   "Node/pnpm" "Python/uv" "Rust"     "嵌入式STM32" "ROS 2"    "zsh/OMZ"  "Git 配置" "附加工具" )
-MODULE_FUNCS=(   mod_base  mod_mirrors mod_docker mod_node   mod_python mod_rust   mod_embedded mod_ros2   mod_zsh    mod_git_config mod_extra )
-MODULE_DEFAULT=( 1         1           1          1          1          1          1            0          1          0         0 )
+MODULE_KEYS=(    base      mirror      docker     node       python     rust       embedded     ros2       zsh        gitconfig extra       ime )
+MODULE_NAMES=(   "基础工具" "镜像源测速" "Docker"   "Node/pnpm" "Python/uv" "Rust"     "嵌入式STM32" "ROS 2"    "zsh/OMZ"  "Git 配置" "附加工具"  "中文输入法" )
+MODULE_FUNCS=(   mod_base  mod_mirrors mod_docker mod_node   mod_python mod_rust   mod_embedded mod_ros2   mod_zsh    mod_git_config mod_extra   mod_ime )
+MODULE_DEFAULT=( 1         1           1          1          1          1          1            0          1          0         0           1 )
 # 各模块是否需要 root 权限(仅用于决定要不要提前申请 sudo)
-MODULE_SUDO=(    1         1           1          0          1          0          1            1          1          0         1 )
+MODULE_SUDO=(    1         1           1          0          1          0          1            1          1          0         1           1 )
 # 模块说明(TUI 下方帮助栏显示)
 MODULE_DESC=(
   "编译器/cmake/git/curl/patch 与 UTF-8 locale"
@@ -1638,6 +1814,7 @@ MODULE_DESC=(
   "zsh + oh-my-zsh + 自动建议/语法高亮/补全, 可设为默认 shell"
   "git 全局 user.name/user.email 与常用选项"
   "jq/rg/fd/tmux/htop/clangd/valgrind/minicom/can-utils 等"
+  "IBus + 智能拼音, 模糊音/候选词/翻页偏好, 中文字体"
 )
 
 declare -a SELECTED=()
@@ -1953,12 +2130,13 @@ report_module_selection() {
 
 # ---- 各模块的后续选项 ----
 ask_followups() {
-  local mi di ri zi gi rec a
+  local mi di ri zi gi ii rec a
   mi="$(idx_of mirror || true)"
   di="$(idx_of docker || true)"
   ri="$(idx_of ros2 || true)"
   zi="$(idx_of zsh || true)"
   gi="$(idx_of gitconfig || true)"
+  ii="$(idx_of ime || true)"
 
   # ---- 镜像源策略 ----
   if [[ -n "$mi" ]] && (( ${SELECTED[$mi]:-0} )); then
@@ -2022,6 +2200,42 @@ ask_followups() {
     ask_confirm "把 zsh 设为默认登录 shell (chsh)?" y || ZSH_SET_DEFAULT=0
     if [[ -f "$HOME/.zshrc" ]] && ! grep -q 'oh-my-zsh' "$HOME/.zshrc" 2>/dev/null; then
       ask_confirm "检测到已有 ~/.zshrc, 备份并替换为本脚本生成的配置?" n && ZSH_OVERWRITE_RC=1
+    fi
+  fi
+
+  # ---- 中文输入法偏好 ----
+  if [[ -n "$ii" ]] && (( ${SELECTED[$ii]:-0} )); then
+    ask_choice "模糊音方案" "选择模糊音方案" 0 \
+      "标准: 平翘舌 z/zh c/ch s/sh + 前后鼻音 an/ang en/eng in/ing" \
+      "全开: 再加方言向 l/n, f/h, g/k, l/r" \
+      "关闭模糊音"
+    case "$TUI_RESULT" in
+      1) IM_FUZZY_SET="all" ;;
+      2) IM_FUZZY_SET="off" ;;
+      *) IM_FUZZY_SET="std" ;;
+    esac
+
+    ask_choice "每页候选词" "每页显示几个候选词" 1 "5 个" "7 个" "9 个"
+    case "$TUI_RESULT" in
+      0) IM_PAGE_SIZE=5 ;;
+      2) IM_PAGE_SIZE=9 ;;
+      *) IM_PAGE_SIZE=7 ;;
+    esac
+
+    ask_choice "云输入" "启用云输入? 停手约 0.6s 会把待选拼音串发往第三方服务器" 0 \
+      "不启用 (推荐: 本地词库已够用, 也不外发输入内容)" \
+      "Google (实测可用)" \
+      "Google CN (实测可用)" \
+      "百度 (接口已失效, 仅作兼容)"
+    case "$TUI_RESULT" in
+      1) IM_CLOUD="google" ;;
+      2) IM_CLOUD="google-cn" ;;
+      3) IM_CLOUD="baidu" ;;
+      *) IM_CLOUD="off" ;;
+    esac
+
+    if _ime_gnome_like; then
+      ask_confirm "把「智能拼音」加入 GNOME 输入源列表?" y || IM_SET_SOURCES=0
     fi
   fi
 
@@ -2115,7 +2329,7 @@ envstrap.sh — 交互式 Linux 开发环境安装脚本
 选项:
   -a, --all          安装全部模块(非交互; ROS 2 用系统推荐发行版)
       --only LIST    只安装指定模块, 逗号分隔
-                     可用: base,mirror,docker,node,python,rust,embedded,ros2,zsh,gitconfig,extra
+                     可用: base,mirror,docker,node,python,rust,embedded,ros2,zsh,gitconfig,extra,ime
                      例: --only node,python,mirror  只装 web 工具链并测速换源
       --ros DISTRO   指定 ROS 2 发行版(如 jazzy / humble / lyrical)
       --mirror MODE  镜像源策略: auto(默认,全部候选测速取最快) | cn(仅国内) |
@@ -2125,6 +2339,11 @@ envstrap.sh — 交互式 Linux 开发环境安装脚本
       --zsh-overwrite-rc 允许备份并覆盖已有的 ~/.zshrc
       --no-chsh      不把 zsh 设为默认登录 shell
       --no-docker-group   不把当前用户加入 docker 组
+      --im-page-size N   每页候选词数 1..11 (默认 7)
+      --im-fuzzy MODE    模糊音: std(默认, 平翘舌+前后鼻音) | all(含 l/n f/h g/k l/r) | off
+      --im-cloud SRC     云输入: off(默认) | baidu(已失效) | google | google-cn
+                         开启后停手约 0.6s 会把待选拼音串发往第三方服务器, 介意隐私勿开
+      --no-im-sources    不改动 GNOME 输入源列表(只装引擎与偏好)
       --dry-run      只打印将执行的命令, 不做任何修改
       --no-tui       禁用方向键 TUI, 使用行式数字菜单(脚本/CI 调用)
   -y, --yes          非交互确认(默认值全部接受)
@@ -2133,8 +2352,8 @@ envstrap.sh — 交互式 Linux 开发环境安装脚本
 
 环境变量:
   ENVSTRAP_NO_PROFILE=1  绝不修改 ~/.bashrc / ~/.zshrc / uv.toml / pip.conf /
-                          cargo config (用 dotfiles 工具管理的用户推荐); 需要添加的
-                          行会打印出来由你自行放入配置
+                          cargo config / 输入法 dconf 偏好 (用 dotfiles 工具管理的
+                          用户推荐); 需要添加的行与 gsettings 命令会打印出来由你自行执行
 
 示例:
   ./envstrap.sh                            # 交互式(推荐)
@@ -2142,6 +2361,7 @@ envstrap.sh — 交互式 Linux 开发环境安装脚本
   ./envstrap.sh --only mirror              # 只测速换源
   ./envstrap.sh --only node,python,rust    # 只装 web / rust 工具链
   ./envstrap.sh --only zsh --zsh-theme powerlevel10k
+  ./envstrap.sh --only ime --im-fuzzy all  # 只配中文输入法, 模糊音全开
   ./envstrap.sh --dry-run --all            # 预演
 
 支持系统: Ubuntu/Debian (apt), Fedora/RHEL (dnf)
@@ -2167,6 +2387,13 @@ parse_args() {
       --zsh-overwrite-rc) ZSH_OVERWRITE_RC=1 ;;
       --no-chsh) ZSH_SET_DEFAULT=0 ;;
       --no-docker-group) DOCKER_SUDO_GROUP=0 ;;
+      --im-page-size) IM_PAGE_SIZE="${2:-7}"; shift ;;
+      --im-page-size=*) IM_PAGE_SIZE="${1#*=}" ;;
+      --im-fuzzy) IM_FUZZY_SET="${2:-std}"; shift ;;
+      --im-fuzzy=*) IM_FUZZY_SET="${1#*=}" ;;
+      --im-cloud) IM_CLOUD="${2:-off}"; shift ;;
+      --im-cloud=*) IM_CLOUD="${1#*=}" ;;
+      --no-im-sources) IM_SET_SOURCES=0 ;;
       --dry-run) DRY_RUN=1 ;;
       --no-tui) NO_TUI=1 ;;
       -y|--yes) ASSUME_YES=1 ;;
